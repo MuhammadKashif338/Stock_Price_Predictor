@@ -1,0 +1,113 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.regression.linear_model import OLS
+
+# Load the data
+file_path = '/content/stock.csv'
+data = pd.read_csv(file_path, parse_dates=[['YEAR', 'MONTH', 'DAY']], index_col='YEAR_MONTH_DAY')
+data.index.names = ['Date']
+
+# Display the first few rows of the data
+print(data.head())
+
+# Plot the 'Close' prices
+plt.figure(figsize=(12, 6))
+plt.plot(data['CLOSE'])
+plt.title('Stock Prices')
+plt.xlabel('Date')
+plt.ylabel('Close Price')
+plt.show()
+
+# Perform Augmented Dickey-Fuller test
+result = adfuller(data['CLOSE'])
+print('ADF Statistic:', result[0])
+print('p-value:', result[1])
+
+# If p-value > 0.05, the series is non-stationary and we need to difference it
+if result[1] > 0.05:
+    diff_data = data['CLOSE'].diff().dropna()
+    result = adfuller(diff_data)
+    print('Differenced Data ADF Statistic:', result[0])
+    print('Differenced Data p-value:', result[1])
+else:
+    diff_data = data['CLOSE']
+
+# Plot ACF and PACF for differenced data
+plot_acf(diff_data)
+plot_pacf(diff_data)
+plt.show()
+
+# Determine p and q from the plots (Example values)
+p = 1
+q = 2
+
+class ARIMA:
+    def __init__(self, data, p, d, q):
+        self.data = data
+        self.p = p
+        self.d = d
+        self.q = q
+
+    def fit(self):
+        # Differencing
+        diff_data = self.data
+        for i in range(self.d):
+            diff_data = diff_data.diff().dropna()
+
+        # AR part (using OLS regression)
+        X = np.column_stack([diff_data.shift(i) for i in range(1, self.p + 1)])
+        X = X[self.p:]
+        y = diff_data[self.p:]
+        self.model_ar = OLS(y, X).fit()
+
+        # MA part (using residuals)
+        self.residuals = y - self.model_ar.predict(X)
+        self.residuals = self.residuals[self.q:]
+
+        X_residuals = np.column_stack([self.residuals.shift(i) for i in range(1, self.q + 1)])
+        X_residuals = X_residuals[self.q:]
+        y_residuals = self.residuals[self.q:]
+
+        self.model_ma = OLS(y_residuals, X_residuals).fit()
+
+    def predict(self, steps):
+        # Make predictions
+        predictions = []
+        last_data = self.data[-self.p:]
+        for i in range(steps):
+            ar_part = np.dot(self.model_ar.params, last_data[-self.p:])
+            ma_part = np.dot(self.model_ma.params, self.residuals[-self.q:])
+            prediction = ar_part + ma_part
+            predictions.append(prediction)
+
+            # Update data for next prediction
+            last_data = np.append(last_data, prediction)
+            self.residuals = np.append(self.residuals, prediction - ar_part)
+
+        return predictions
+
+# Fit the model
+arima = ARIMA(data['CLOSE'], p=p, d=2, q=q)
+arima.fit()
+
+# Make predictions
+steps =10
+predictions = arima.predict(steps=steps)
+print(predictions)
+
+# Create a new DataFrame for plotting
+pred_dates = pd.date_range(start=data.index[-1], periods=steps)
+pred_series = pd.Series(predictions, index=pred_dates)
+
+# Plot the original data and the predictions
+plt.figure(figsize=(12, 6))
+plt.plot(data['CLOSE'], label='Original Data')
+plt.plot(pred_series, label='Predictions', color='red')
+plt.title('Stock Prices and ARIMA Predictions')
+plt.xlabel('Date')
+plt.ylabel('Close Price')
+plt.legend()
+plt.show()
