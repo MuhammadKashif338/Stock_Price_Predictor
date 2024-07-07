@@ -105,7 +105,7 @@ def main():
     # years = [2020, 2021, 2022, 2023]
     # months = range(1, 13)
 
-    # For testing data
+    # For validation data
     years = [2024]
     months = range(1, 7)
 

@@ -4,10 +4,17 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pandas = "*"
+altair = "*"
 matplotlib = "*"
-statsmodels = "*"
 numpy = "*"
+pandas = "*"
+selenium = "*"
+setuptools = "*"
+statsmodels = "*"
+streamlit = "*"
+undetected-chromedriver = "*"
+scikit-learn = "*"
+seaborn = "*"
 
 [dev-packages]
 ipykernel = "*"
