@@ -3,8 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 
-# import seaborn as sns
-# from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 
 from sklearn.linear_model import LinearRegression
 
@@ -21,7 +20,7 @@ DEFAULT_ADF_THRESH = 0.05
 MAX_P = 28
 MAX_Q = 7
 
-VERBOSE_SAMPLES = 5
+VERBOSE_SAMPLES = 25
 
 
 def resolve_path(path):
@@ -40,7 +39,6 @@ def generate_lag_features(data, lag, column=TARGET_COLUMN):
     shifted_columns = pd.DataFrame()
     for i in range(1, lag + 1):
         shifted_columns[f"{column}_SHIFTED_BY_{i}"] = data[column].shift(i)
-
     return shifted_columns.dropna()
 
 
@@ -53,7 +51,7 @@ def difference(x):
     return x.diff().dropna()
 
 
-def make_data_stationary(data, column=TARGET_COLUMN, thresh=DEFAULT_ADF_THRESH):
+def make_data_stationary(data, column=TARGET_COLUMN):
     x = data[column].copy()
     d = 0
     while not adf_check(x):
@@ -69,15 +67,15 @@ def root_mean_squared_error(y, y_hat):
 class AR:
     class _Cache:
         def __init__(self):
-            self.residuals = None
+            self.tail = None
 
-    def __init__(self, differences):
+    def __init__(self, data):
         self.p = None
 
         self.coef = None
         self.intercept = None
 
-        self.differences = differences.copy()
+        self.data = data.copy()
 
         self._cache = AR._Cache()
 
@@ -85,8 +83,11 @@ class AR:
         p = 0
         previous_error = None
         for lag in range(1, MAX_P + 1):
-            x = generate_lag_features(self.differences, lag).values
-            y = self.differences[lag:].values
+            x = generate_lag_features(self.data, lag).values
+            y = self.data[lag:].values
+
+            if verbose:
+                print(f"AR:fit() :: x={x.shape}, y={y.shape}")
 
             LR = LinearRegression()
             LR.fit(x, y)
@@ -100,7 +101,7 @@ class AR:
                 self.coef = LR.coef_
                 self.intercept = LR.intercept_
 
-                self._cache.residuals = y - y_hat
+                self._cache.tail = self.data[-lag - 1 :].values
 
             if verbose:
                 print(f"AR:fit() :: p={lag} | error={e}")
@@ -109,9 +110,26 @@ class AR:
                     for i in range(VERBOSE_SAMPLES):
                         print("\t", y[i], y_hat[i])
         self.p = p
+        print(self.p)
 
-    def predict(self, x):
-        return x * self.coef + self.intercept
+    def _predict(self, x):
+        if self.coef.ndim == 1:
+            return x @ self.coef + self.intercept
+        else:
+            return x @ self.coef.T + self.intercept
+
+    def forecast(self, steps):
+        tail = list(self._cache.tail)
+
+        y_hat = np.zeros((steps,))
+        for i in range(steps):
+            p_window = pd.DataFrame(tail[-self.p - 1 :], columns=[TARGET_COLUMN])
+            x = generate_lag_features(p_window, self.p).values
+            print(x)
+            y_hat_i = self._predict(x)[-1, 0]
+            y_hat[i] = y_hat_i
+            tail.append(np.array([y_hat_i]))
+        return y_hat
 
 
 class MA:
@@ -124,29 +142,30 @@ class MA:
         self.residuals = residuals.copy()
 
     def fit(self, verbose=False):
+        lag = 2
         q = 0
         previous_error = None
-        for lag in range(1, MAX_Q + 1):
-            x = generate_lag_features(self.residuals, lag).values
-            y = self.residuals[lag:].values
+        # for lag in range(1, MAX_Q + 1):
+        x = generate_lag_features(self.residuals, lag).values
+        y = self.residuals[lag:].values
 
-            LR = LinearRegression()
-            LR.fit(x, y)
+        LR = LinearRegression()
+        LR.fit(x, y)
 
-            y_hat = LR.predict(x)
-            e = root_mean_squared_error(y, y_hat)
-            if previous_error is None or e < previous_error:
-                q = lag
-                previous_error = e
+        y_hat = LR.predict(x)
+        e = root_mean_squared_error(y, y_hat)
+        if previous_error is None or e < previous_error:
+            q = lag
+            previous_error = e
 
-                self.coef = LR.coef_
-                self.intercept = LR.intercept_
-            if verbose:
-                print(f"MA:fit() :: p={lag} | error={e}")
-                if lag == MAX_Q:
-                    print(f"At q={q}:")
-                    for i in range(VERBOSE_SAMPLES):
-                        print("\t", y[i], y_hat[i])
+            self.coef = LR.coef_
+            self.intercept = LR.intercept_
+        if verbose:
+            print(f"MA:fit() :: p={lag} | error={e}")
+            if lag == MAX_Q:
+                print(f"At q={q}:")
+                for i in range(VERBOSE_SAMPLES):
+                    print("\t", y[i], y_hat[i])
         self.q = q
 
     def predict(self, x):
@@ -216,13 +235,28 @@ class ARIMA:
 
 
 if __name__ == "__main__":
-    t_set = load_data("/data/PSX/processed/train/data.csv")
-    v_set = load_data("/data/PSX/processed/validate/data.csv")
+    t_set = load_data("/data/PSX/raw/train/data.csv")
+    v_set = load_data("/data/PSX/raw/validate/data.csv")
 
-    model = ARIMA(t_set)
-    model.fit(verbose=False)
+    # model = ARIMA(t_set)
+    # model.fit(verbose=False)
 
-    model.summary()
-    model.cache()
+    # model.summary()
+    # model.cache()
 
-    forecasts = model.forecast(steps=31)
+    # forecasts = model.forecast(steps=31)
+
+    model = AR(t_set)
+    model.fit()
+
+    steps = 31
+
+    v_subset = v_set.values[:steps]
+    predictions = model.forecast(steps)
+
+    for i in range(steps):
+        print(v_subset[i], predictions[i])
+
+    plt.plot(predictions)
+    plt.plot(v_subset)
+    plt.show()
